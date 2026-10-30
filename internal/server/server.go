@@ -54,9 +54,10 @@ func (p *peer) send(m protocol.Message) {
 }
 
 type event struct {
-	p    *peer
-	x, y int
-	left bool
+	p      *peer
+	typeID string
+	x, y   int
+	left   bool
 }
 type room struct {
 	server   *Server
@@ -153,8 +154,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			s.join(p)
 			continue
 		}
-		if in.Type != "draw" || in.X == nil || in.Y == nil || *in.X < 0 || *in.X >= protocol.Width || *in.Y < 0 || *in.Y >= protocol.Height {
-			p.send(protocol.Message{Type: "error", Error: "invalid draw"})
+		validPoint := (in.Type == "draw" || in.Type == "erase") && in.X != nil && in.Y != nil && *in.X >= 0 && *in.X < protocol.Width && *in.Y >= 0 && *in.Y < protocol.Height
+		validReset := in.Type == "reset" && in.X == nil && in.Y == nil
+		if !validPoint && !validReset {
+			p.send(protocol.Message{Type: "error", Error: "invalid action"})
 			continue
 		}
 		s.mu.Lock()
@@ -165,13 +168,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			continue
 		}
 		select {
-		case r.input <- event{p: p, x: *in.X, y: *in.Y}:
+		case r.input <- eventFromInput(p, in):
 		case <-r.done:
 			p.send(protocol.Message{Type: "error", Error: "round finished"})
 		case <-s.done:
 			return
 		}
 	}
+}
+
+func eventFromInput(p *peer, in protocol.Input) event {
+	e := event{p: p, typeID: in.Type}
+	if in.X != nil {
+		e.x = *in.X
+	}
+	if in.Y != nil {
+		e.y = *in.Y
+	}
+	return e
 }
 func (p *peer) write() {
 	ticker := time.NewTicker(20 * time.Second)
@@ -304,8 +318,17 @@ func (r *room) run() {
 			if left[e.p] {
 				continue
 			}
-			r.canvas[e.y][e.x] = e.p.color
-			r.snapshot("canvas_update")
+			switch e.typeID {
+			case "draw":
+				r.canvas[e.y][e.x] = e.p.color
+				r.snapshot("canvas_update")
+			case "erase":
+				r.canvas[e.y][e.x] = 0
+				r.snapshot("canvas_update")
+			case "reset":
+				r.canvas = protocol.Canvas{}
+				r.snapshot("canvas_reset")
+			}
 		}
 	}
 }

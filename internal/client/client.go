@@ -94,19 +94,22 @@ func (t *Transport) write() {
 		}
 	}
 }
-func (t *Transport) draw(x, y int) bool {
+func (t *Transport) sendAction(action string, x, y *int) bool {
 	select {
 	case <-t.done:
 		return false
 	default:
 	}
 	select {
-	case t.outgoing <- protocol.Input{Type: "draw", X: &x, Y: &y}:
+	case t.outgoing <- protocol.Input{Type: action, X: x, Y: y}:
 		return true
 	default:
 		return false
 	}
 }
+func (t *Transport) draw(x, y int) bool  { return t.sendAction("draw", &x, &y) }
+func (t *Transport) erase(x, y int) bool { return t.sendAction("erase", &x, &y) }
+func (t *Transport) reset() bool         { return t.sendAction("reset", nil, nil) }
 func (t *Transport) receive() tea.Msg {
 	select {
 	case m := <-t.incoming:
@@ -154,6 +157,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.player = v.Player
 			m.status = "Make something together."
 		case "canvas_update":
+		case "canvas_reset":
+			m.status = "Canvas cleared. Start a new drawing."
 		case "timer":
 		case "player_left":
 			m.status = "Stranger left. You can finish the drawing."
@@ -168,7 +173,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.Canvas != nil {
 			m.canvas = *v.Canvas
 		}
-		if v.Type == "timer" || v.Type == "matched" || v.Type == "finished" || v.Type == "canvas_update" {
+		if v.Type == "timer" || v.Type == "matched" || v.Type == "finished" || v.Type == "canvas_update" || v.Type == "canvas_reset" {
 			m.seconds = max(0, min(60, v.Seconds))
 		}
 		return m, m.transport.receive
@@ -193,6 +198,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.transport.draw(m.x, m.y) {
 				m.status = "Network busy. Try drawing again."
 			}
+		case "e", "backspace", "delete":
+			if !m.transport.erase(m.x, m.y) {
+				m.status = "Network busy. Try erasing again."
+			}
+		case "r":
+			if !m.transport.reset() {
+				m.status = "Network busy. Try resetting again."
+			}
 		}
 	}
 	return m, nil
@@ -214,7 +227,15 @@ func (m Model) View() tea.View {
 	if m.width < 48 || m.height < 26 {
 		b.WriteString("CROSSWIRE\nTerminal too small: need 48 x 26.\nResize the terminal. Q: quit.")
 	} else {
-		fmt.Fprintf(&b, "  CROSSWIRE                         %02d:%02d\n\n", m.seconds/60, m.seconds%60)
+		phase := "WAITING"
+		if m.state == "playing" {
+			phase = "LIVE"
+		} else if m.state == "finished" {
+			phase = "FINISHED"
+		} else if m.state == "disconnected" {
+			phase = "OFFLINE"
+		}
+		fmt.Fprintf(&b, "  CROSSWIRE  [%-8s]             %02d:%02d\n\n", phase, m.seconds/60, m.seconds%60)
 		if m.state == "waiting" || m.state == "disconnected" {
 			fmt.Fprintf(&b, "  %s\n\n  Q: quit\n", m.status)
 		} else {
@@ -241,8 +262,10 @@ func (m Model) View() tea.View {
 			if m.player == 2 {
 				own, other = other, own
 			}
-			fmt.Fprintf(&b, "  YOU: %s  STRANGER: %s\n", m.ink(own, m.player), m.ink(other, 3-m.player))
-			b.WriteString("  WASD / ARROWS: move  SPACE: draw  Q: quit\n  " + m.status)
+			fmt.Fprintf(&b, "  YOU  %s PARTNER  %s\n", m.ink(fmt.Sprintf("%-16s", own), m.player), m.ink(other, 3-m.player))
+			b.WriteString("  MOVE  WASD/arrows   DRAW  Space   ERASE  E\n")
+			b.WriteString("  RESET R             QUIT  Q\n")
+			b.WriteString("  " + m.status)
 		}
 	}
 	v := tea.NewView(b.String())

@@ -27,12 +27,25 @@ func TestTerminalStates(t *testing.T) {
 	c := protocol.Canvas{}
 	n, _ = m.Update(protocol.Message{Type: "matched", Player: 2, Canvas: &c, Seconds: 60})
 	m = n.(Model)
+	if view := m.View().Content; !strings.Contains(view, "ERASE  E") || !strings.Contains(view, "RESET R") || !strings.Contains(view, "[LIVE") {
+		t.Fatal("playing controls or phase missing from interface")
+	}
 	m = key(m, 'd')
 	m = key(m, 's')
 	m = key(m, ' ')
 	event := <-tr.outgoing
-	if *event.X != 1 || *event.Y != 1 || m.player != 2 {
+	if event.Type != "draw" || *event.X != 1 || *event.Y != 1 || m.player != 2 {
 		t.Fatal("controls or color broken")
+	}
+	m = key(m, 'e')
+	event = <-tr.outgoing
+	if event.Type != "erase" || *event.X != 1 || *event.Y != 1 {
+		t.Fatal("erase control broken")
+	}
+	m = key(m, 'r')
+	event = <-tr.outgoing
+	if event.Type != "reset" || event.X != nil || event.Y != nil {
+		t.Fatal("reset control broken")
 	}
 	for i := 0; i < 100; i++ {
 		m = key(m, 'a')
@@ -46,6 +59,12 @@ func TestTerminalStates(t *testing.T) {
 	m = n.(Model)
 	if m.canvas[2][3] != 1 || !strings.Contains(m.View().Content, "00:22") {
 		t.Fatal("update not rendered")
+	}
+	empty := protocol.Canvas{}
+	n, _ = m.Update(protocol.Message{Type: "canvas_reset", Canvas: &empty, Seconds: 21})
+	m = n.(Model)
+	if m.canvas != empty || !strings.Contains(m.status, "cleared") {
+		t.Fatal("reset not rendered")
 	}
 	n, _ = m.Update(protocol.Message{Type: "player_left"})
 	m = n.(Model)
@@ -111,6 +130,19 @@ func TestTransportEndToEnd(t *testing.T) {
 	ua, ub := next(a, "canvas_update"), next(b, "canvas_update")
 	if *ua.Canvas != *ub.Canvas || ua.Canvas[3][2] != 1 {
 		t.Fatal("transport desynchronized")
+	}
+	a.erase(2, 3)
+	ua, ub = next(a, "canvas_update"), next(b, "canvas_update")
+	if *ua.Canvas != *ub.Canvas || ua.Canvas[3][2] != 0 {
+		t.Fatal("erase desynchronized")
+	}
+	a.draw(4, 5)
+	next(a, "canvas_update")
+	next(b, "canvas_update")
+	b.reset()
+	ua, ub = next(a, "canvas_reset"), next(b, "canvas_reset")
+	if *ua.Canvas != (protocol.Canvas{}) || *ub.Canvas != (protocol.Canvas{}) {
+		t.Fatal("reset desynchronized")
 	}
 	fa, fb := next(a, "finished"), next(b, "finished")
 	if *fa.Canvas != *fb.Canvas {

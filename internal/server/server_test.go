@@ -58,6 +58,9 @@ func pair(t *testing.T, url string) (*websocket.Conn, *websocket.Conn, protocol.
 	return a, b, read(t, a, "matched"), read(t, b, "matched")
 }
 func draw(x, y int) map[string]any { return map[string]any{"type": "draw", "x": x, "y": y} }
+func erase(x, y int) map[string]any {
+	return map[string]any{"type": "erase", "x": x, "y": y}
+}
 func eventually(t *testing.T, f func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -102,7 +105,7 @@ func TestMatchmakingAndIsolation(t *testing.T) {
 func TestInvalidMessages(t *testing.T) {
 	_, url := setup(t, time.Minute)
 	a, b, _, _ := pair(t, url)
-	invalid := []string{`{`, `null`, `{"type":"draw","x":-1,"y":0}`, `{"type":"draw","x":40,"y":0}`, `{"type":"draw","x":0,"y":16}`, `{"type":"draw","x":0}`, `{"type":"draw","x":0.5,"y":1}`, `{"type":"draw","x":0,"y":0,"text":"\u001b[2J"}`, `{"type":"join"}`, `{"type":"draw","x":0,"y":0} {}`, `{"type":"unknown"}`}
+	invalid := []string{`{`, `null`, `{"type":"draw","x":-1,"y":0}`, `{"type":"draw","x":40,"y":0}`, `{"type":"draw","x":0,"y":16}`, `{"type":"draw","x":0}`, `{"type":"draw","x":0.5,"y":1}`, `{"type":"erase","x":0}`, `{"type":"reset","x":0,"y":0}`, `{"type":"draw","x":0,"y":0,"text":"\u001b[2J"}`, `{"type":"join"}`, `{"type":"draw","x":0,"y":0} {}`, `{"type":"unknown"}`}
 	for _, data := range invalid {
 		a.SetWriteDeadline(time.Now().Add(time.Second))
 		if err := a.WriteMessage(websocket.TextMessage, []byte(data)); err != nil {
@@ -116,6 +119,26 @@ func TestInvalidMessages(t *testing.T) {
 	expected[1][1] = 1
 	if *ua.Canvas != expected || *ub.Canvas != expected {
 		t.Fatal("invalid input changed canvas")
+	}
+}
+func TestEraseAndReset(t *testing.T) {
+	_, url := setup(t, time.Minute)
+	a, b, _, _ := pair(t, url)
+	send(t, a, draw(5, 6))
+	read(t, a, "canvas_update")
+	read(t, b, "canvas_update")
+	send(t, b, erase(5, 6))
+	ua, ub := read(t, a, "canvas_update"), read(t, b, "canvas_update")
+	if *ua.Canvas != *ub.Canvas || ua.Canvas[6][5] != 0 {
+		t.Fatal("erase did not synchronize")
+	}
+	send(t, a, draw(1, 1))
+	read(t, a, "canvas_update")
+	read(t, b, "canvas_update")
+	send(t, b, map[string]any{"type": "reset"})
+	ua, ub = read(t, a, "canvas_reset"), read(t, b, "canvas_reset")
+	if *ua.Canvas != (protocol.Canvas{}) || *ub.Canvas != (protocol.Canvas{}) {
+		t.Fatal("reset did not clear both canvases")
 	}
 }
 func TestConcurrentDrawing(t *testing.T) {
