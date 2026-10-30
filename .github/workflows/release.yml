@@ -1,0 +1,54 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - run: go mod verify
+      - run: go test -race -count=1 ./...
+      - run: go vet ./...
+      - name: Build and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          for target in linux windows; do
+            suffix=''
+            if [ "$target" = windows ]; then suffix='.exe'; fi
+            for command in crosswire crosswired; do
+              CGO_ENABLED=0 GOOS="$target" GOARCH=amd64 go build -mod=readonly -trimpath -o "bin/$command-$target-amd64$suffix" "./cmd/$command"
+            done
+          done
+          cd bin
+          sha256sum crosswire-* crosswired-* > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-binaries
+          path: bin/*
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-binaries
+          path: bin
+      - name: Publish validated artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" bin/* --verify-tag --generate-notes

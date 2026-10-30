@@ -1,0 +1,29 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - run: go mod verify
+      - run: go test -race -count=1 ./...
+      - run: go vet ./...
+      - name: Build native executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          for target in linux windows; do
+            suffix=''
+            if [ "$target" = windows ]; then suffix='.exe'; fi
+            for command in crosswire crosswired; do
+              CGO_ENABLED=0 GOOS="$target" GOARCH=amd64 go build -mod=readonly -trimpath -o "bin/$command-$target-amd64$suffix" "./cmd/$command"
+            done
+          done
